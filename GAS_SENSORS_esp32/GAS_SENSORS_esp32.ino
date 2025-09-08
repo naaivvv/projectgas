@@ -1,0 +1,350 @@
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <WebServer.h>
+
+// WiFi credentials
+const char* ssid = "CentralRouter";
+const char* password = "123456789";
+String nodeName = "node111";
+const char* serverName = "http://192.168.0.100/projectgas/sensorvalue.php";
+
+// Static IP configuration
+IPAddress ip(192, 168, 0, 111);
+IPAddress gateway_dns(192, 168, 0, 1);
+IPAddress subnet(255, 255, 255, 0);
+
+// UART pins
+#define RX_PIN 16
+#define TX_PIN 17
+
+// Relay pins (ESP32 direct control)
+#define FAN_PIN 25
+#define COMPRESSOR_PIN 26
+#define SSR_PIN 27#include <WiFi.h>
+#include <HTTPClient.h>
+#include <WebServer.h>
+
+// WiFi credentials
+const char* ssid = "CentralRouter";
+const char* password = "123456789";
+String nodeName = "node111";
+const char* serverName = "http://192.168.0.100/projectgas/sensorvalue.php";
+
+// Static IP configuration
+IPAddress ip(192, 168, 0, 111);
+IPAddress gateway_dns(192, 168, 0, 1);
+IPAddress subnet(255, 255, 255, 0);
+
+// UART pins
+#define RX_PIN 16
+#define TX_PIN 17
+
+// Relay pins (ESP32 direct control)
+#define FAN_PIN 25
+#define COMPRESSOR_PIN 26
+#define SSR_PIN 27
+
+// Relay states: 0=Fan, 1=Compressor, 2=SSR
+int relayStates[3] = {0, 0, 0};
+
+// Sensor values
+int mq7_val = 0;
+int co2_val = 0;
+float o2_val = 0.0;
+
+// Web server
+WebServer server(80);
+
+// Timing
+unsigned long lastHTTPRequest = 0;
+const unsigned long httpRequestInterval = 10000;
+
+void setup() {
+  Serial.begin(9600);
+  Serial2.begin(9600, SERIAL_8N1, RX_PIN, TX_PIN);
+  Serial2.setTimeout(100);
+
+  // Relay pins setup
+  pinMode(FAN_PIN, OUTPUT);
+  pinMode(COMPRESSOR_PIN, OUTPUT);
+  pinMode(SSR_PIN, OUTPUT);
+
+  digitalWrite(FAN_PIN, LOW);
+  digitalWrite(COMPRESSOR_PIN, LOW);
+  digitalWrite(SSR_PIN, LOW);
+
+  WiFi.setSleep(false);
+  WiFi.config(ip, gateway_dns, subnet, gateway_dns);
+  WiFi.begin(ssid, password);
+
+  Serial.println("Connecting to WiFi...");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("\nWiFi connected");
+  Serial.print("IP Address: ");
+  Serial.println(WiFi.localIP());
+
+  server.on("/control", HTTP_OPTIONS, []() {
+    server.sendHeader("Access-Control-Allow-Origin", "*");
+    server.sendHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+    server.send(204);
+  });
+
+  server.on("/control", HTTP_GET, handleGetRequest);
+  server.begin();
+  Serial.println("HTTP server started");
+}
+
+void loop() {
+  if (millis() - lastHTTPRequest >= httpRequestInterval) {
+    lastHTTPRequest = millis();
+    sendDataToServer();
+  }
+
+  readAndProcessSensorData();
+  server.handleClient();
+  delay(500);
+}
+
+void sendDataToServer() {
+  if (WiFi.status() == WL_CONNECTED) {
+    WiFiClient client;
+    HTTPClient http;
+
+    http.begin(client, serverName);
+    http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+
+    String httpRequestData = "node_name=" + nodeName +
+                             "&mq7=" + String(mq7_val) +
+                             "&co2=" + String(co2_val) +
+                             "&o2=" + String(o2_val, 2) +
+                             "&fan=" + String(relayStates[0]) +
+                             "&compressor=" + String(relayStates[1]) +
+                             "&ssr=" + String(relayStates[2]);
+
+    int httpResponseCode = http.POST(httpRequestData);
+    http.end();
+    client.stop();
+
+    Serial.print("Data sent to server. HTTP Response code: ");
+    Serial.println(httpResponseCode);
+
+    // Log relay states
+    Serial.println("----- Relay States -----");
+    Serial.print("Fan: "); Serial.println(relayStates[0] ? "ON" : "OFF");
+    Serial.print("Compressor: "); Serial.println(relayStates[1] ? "ON" : "OFF");
+    Serial.print("SSR: "); Serial.println(relayStates[2] ? "ON" : "OFF");
+    Serial.println("------------------------");
+  } else {
+    Serial.println("WiFi Disconnected. Cannot send data.");
+  }
+}
+
+void handleGetRequest() {
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  server.sendHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  if (server.hasArg("pin") && server.hasArg("state")) {
+    int pin = server.arg("pin").toInt();   // 0=Fan,1=Compressor,2=SSR
+    int state = server.arg("state").toInt();
+
+    if (pin >= 0 && pin < 3) {
+      relayStates[pin] = state;
+
+      // Control actual relay pins
+      if (pin == 0) digitalWrite(FAN_PIN, state ? HIGH : LOW);
+      if (pin == 1) digitalWrite(COMPRESSOR_PIN, state ? HIGH : LOW);
+      if (pin == 2) digitalWrite(SSR_PIN, state ? HIGH : LOW);
+
+      Serial.print("Relay "); Serial.print(pin);
+      Serial.print(" turned ");
+      Serial.println(state ? "ON" : "OFF");
+
+      server.send(200, "text/plain", "Relay state updated");
+    } else {
+      server.send(400, "text/plain", "Invalid relay ID (must be 0, 1, or 2)");
+    }
+  } else {
+    server.send(400, "text/plain", "Missing arguments: pin or state");
+  }
+}
+
+void readAndProcessSensorData() {
+  if (Serial2.available()) {
+    String receivedData = Serial2.readStringUntil('\n');
+    receivedData.trim();
+
+    // Expected format: MQ7,CO2,O2
+    int firstComma = receivedData.indexOf(',');
+    int secondComma = receivedData.indexOf(',', firstComma + 1);
+
+    if (firstComma > 0 && secondComma > firstComma) {
+      mq7_val = receivedData.substring(0, firstComma).toInt();
+      co2_val = receivedData.substring(firstComma + 1, secondComma).toInt();
+      o2_val = receivedData.substring(secondComma + 1).toFloat();
+
+      Serial.println("----- Sensor Data -----");
+      Serial.print("MQ7: "); Serial.println(mq7_val);
+      Serial.print("CO2: "); Serial.println(co2_val);
+      Serial.print("O2: "); Serial.print(o2_val); Serial.println(" %");
+      Serial.println("------------------------");
+    } else {
+      Serial.println("Invalid UART format received.");
+    }
+  }
+}
+
+
+// Relay states: 0=Fan, 1=Compressor, 2=SSR
+int relayStates[3] = {0, 0, 0};
+
+// Sensor values
+int mq7_val = 0;
+int co2_val = 0;
+float o2_val = 0.0;
+
+// Web server
+WebServer server(80);
+
+// Timing
+unsigned long lastHTTPRequest = 0;
+const unsigned long httpRequestInterval = 10000;
+
+void setup() {
+  Serial.begin(9600);
+  Serial2.begin(9600, SERIAL_8N1, RX_PIN, TX_PIN);
+  Serial2.setTimeout(100);
+
+  // Relay pins setup
+  pinMode(FAN_PIN, OUTPUT);
+  pinMode(COMPRESSOR_PIN, OUTPUT);
+  pinMode(SSR_PIN, OUTPUT);
+
+  digitalWrite(FAN_PIN, LOW);
+  digitalWrite(COMPRESSOR_PIN, LOW);
+  digitalWrite(SSR_PIN, LOW);
+
+  WiFi.setSleep(false);
+  WiFi.config(ip, gateway_dns, subnet, gateway_dns);
+  WiFi.begin(ssid, password);
+
+  Serial.println("Connecting to WiFi...");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("\nWiFi connected");
+  Serial.print("IP Address: ");
+  Serial.println(WiFi.localIP());
+
+  server.on("/control", HTTP_OPTIONS, []() {
+    server.sendHeader("Access-Control-Allow-Origin", "*");
+    server.sendHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+    server.send(204);
+  });
+
+  server.on("/control", HTTP_GET, handleGetRequest);
+  server.begin();
+  Serial.println("HTTP server started");
+}
+
+void loop() {
+  if (millis() - lastHTTPRequest >= httpRequestInterval) {
+    lastHTTPRequest = millis();
+    sendDataToServer();
+  }
+
+  readAndProcessSensorData();
+  server.handleClient();
+  delay(500);
+}
+
+void sendDataToServer() {
+  if (WiFi.status() == WL_CONNECTED) {
+    WiFiClient client;
+    HTTPClient http;
+
+    http.begin(client, serverName);
+    http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+
+    String httpRequestData = "node_name=" + nodeName +
+                             "&mq7=" + String(mq7_val) +
+                             "&co2=" + String(co2_val) +
+                             "&o2=" + String(o2_val, 2) +
+                             "&fan=" + String(relayStates[0]) +
+                             "&compressor=" + String(relayStates[1]) +
+                             "&ssr=" + String(relayStates[2]);
+
+    int httpResponseCode = http.POST(httpRequestData);
+    http.end();
+    client.stop();
+
+    Serial.print("Data sent to server. HTTP Response code: ");
+    Serial.println(httpResponseCode);
+  } else {
+    Serial.println("WiFi Disconnected. Cannot send data.");
+  }
+}
+
+void handleGetRequest() {
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  server.sendHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  if (server.hasArg("pin") && server.hasArg("state")) {
+    int pin = server.arg("pin").toInt();   // 0=Fan,1=Compressor,2=SSR
+    int state = server.arg("state").toInt();
+
+    if (pin >= 0 && pin < 3) {
+      relayStates[pin] = state;
+
+      // Control actual relay pins
+      if (pin == 0) digitalWrite(FAN_PIN, state ? HIGH : LOW);
+      if (pin == 1) digitalWrite(COMPRESSOR_PIN, state ? HIGH : LOW);
+      if (pin == 2) digitalWrite(SSR_PIN, state ? HIGH : LOW);
+
+      Serial.print("Relay "); Serial.print(pin);
+      Serial.print(" turned ");
+      Serial.println(state ? "ON" : "OFF");
+
+      server.send(200, "text/plain", "Relay state updated");
+    } else {
+      server.send(400, "text/plain", "Invalid relay ID (must be 0, 1, or 2)");
+    }
+  } else {
+    server.send(400, "text/plain", "Missing arguments: pin or state");
+  }
+}
+
+void readAndProcessSensorData() {
+  if (Serial2.available()) {
+    String receivedData = Serial2.readStringUntil('\n');
+    receivedData.trim();
+
+    // Expected format: MQ7,CO2,O2
+    int firstComma = receivedData.indexOf(',');
+    int secondComma = receivedData.indexOf(',', firstComma + 1);
+
+    if (firstComma > 0 && secondComma > firstComma) {
+      mq7_val = receivedData.substring(0, firstComma).toInt();
+      co2_val = receivedData.substring(firstComma + 1, secondComma).toInt();
+      o2_val = receivedData.substring(secondComma + 1).toFloat();
+
+      Serial.println("----- Sensor Data -----");
+      Serial.print("MQ7: "); Serial.println(mq7_val);
+      Serial.print("CO2: "); Serial.println(co2_val);
+      Serial.print("O2: "); Serial.print(o2_val); Serial.println(" %");
+      Serial.println("------------------------");
+    } else {
+      Serial.println("Invalid UART format received.");
+    }
+  }
+}
+
