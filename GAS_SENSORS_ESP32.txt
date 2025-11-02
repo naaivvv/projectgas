@@ -6,7 +6,7 @@
 const char* ssid = "CentralRouter";
 const char* password = "123456789";
 String nodeName = "node111";
-const char* serverName = "http://192.168.0.100/projectgas/sensorvalue.php";
+const char* serverName = "http://192.168.1.10/chrono_state/php-backend/sensor_value.php";
 
 // Static IP configuration
 IPAddress ip(192, 168, 0, 111);
@@ -25,7 +25,7 @@ IPAddress subnet(255, 255, 255, 0);
 int relayStates[2] = {0, 0};
 
 // Sensor values
-int mq7_val = 0;
+int co_val = 0;
 int co2_val = 0;
 float o2_val = 0.0;
 
@@ -108,7 +108,7 @@ void sendDataToServer() {
     http.addHeader("Content-Type", "application/x-www-form-urlencoded");
 
     String httpRequestData = "node_name=" + nodeName +
-                             "&mq7=" + String(mq7_val) +
+                             "&co=" + String(co_val) +
                              "&co2=" + String(co2_val) +
                              "&o2=" + String(o2_val, 2) +
                              "&fan=" + String(relayStates[0]) +
@@ -169,12 +169,12 @@ void readAndProcessSensorData() {
     int secondComma = receivedData.indexOf(',', firstComma + 1);
 
     if (firstComma > 0 && secondComma > firstComma) {
-      mq7_val = receivedData.substring(0, firstComma).toInt();
+      co_val = receivedData.substring(0, firstComma).toInt();
       co2_val = receivedData.substring(firstComma + 1, secondComma).toInt();
       o2_val = receivedData.substring(secondComma + 1).toFloat();
 
       Serial.println("----- Sensor Data -----");
-      Serial.print("MQ7: "); Serial.println(mq7_val);
+      Serial.print("MQ7: "); Serial.println(co_val);
       Serial.print("CO2: "); Serial.println(co2_val);
       Serial.print("O2: "); Serial.print(o2_val); Serial.println(" %");
       Serial.println("------------------------");
