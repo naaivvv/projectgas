@@ -17,13 +17,12 @@ IPAddress subnet(255, 255, 255, 0);
 #define RX_PIN 16
 #define TX_PIN 17
 
-// Relay pins (ESP32 direct control)
+// Relay pins
 #define FAN_PIN 25
 #define COMPRESSOR_PIN 26
-#define SSR_PIN 27
 
-// Relay states: 0=Fan, 1=Compressor, 2=SSR
-int relayStates[3] = {0, 0, 0};
+// Relay states: 0=Fan, 1=Compressor
+int relayStates[2] = {0, 0};
 
 // Sensor values
 int mq7_val = 0;
@@ -46,11 +45,9 @@ void setup() {
   // Relay pins setup
   pinMode(FAN_PIN, OUTPUT);
   pinMode(COMPRESSOR_PIN, OUTPUT);
-  pinMode(SSR_PIN, OUTPUT);
 
   digitalWrite(FAN_PIN, LOW);
   digitalWrite(COMPRESSOR_PIN, LOW);
-  digitalWrite(SSR_PIN, LOW);
 
   WiFi.setSleep(false);
   WiFi.config(ip, gateway_dns, subnet, gateway_dns);
@@ -66,7 +63,7 @@ void setup() {
   Serial.print("IP Address: ");
   Serial.println(WiFi.localIP());
 
-  // Warm-up period for sensors (5 minutes = 300 seconds)
+  // Warm-up period for sensors (5 minutes)
   Serial.println("Sensors warming up... Please wait 5 minutes.");
   for (int i = 300; i > 0; i--) {
     Serial.print("Warm-up time remaining: ");
@@ -77,6 +74,7 @@ void setup() {
   sensorsReady = true;
   Serial.println("Sensors are ready! Starting normal operation.");
 
+  // CORS handling
   server.on("/control", HTTP_OPTIONS, []() {
     server.sendHeader("Access-Control-Allow-Origin", "*");
     server.sendHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
@@ -84,6 +82,7 @@ void setup() {
     server.send(204);
   });
 
+  // Control endpoint
   server.on("/control", HTTP_GET, handleGetRequest);
   server.begin();
   Serial.println("HTTP server started");
@@ -113,8 +112,7 @@ void sendDataToServer() {
                              "&co2=" + String(co2_val) +
                              "&o2=" + String(o2_val, 2) +
                              "&fan=" + String(relayStates[0]) +
-                             "&compressor=" + String(relayStates[1]) +
-                             "&ssr=" + String(relayStates[2]);
+                             "&compressor=" + String(relayStates[1]);
 
     int httpResponseCode = http.POST(httpRequestData);
     http.end();
@@ -127,7 +125,6 @@ void sendDataToServer() {
     Serial.println("----- Relay States -----");
     Serial.print("Fan: "); Serial.println(relayStates[0] ? "ON" : "OFF");
     Serial.print("Compressor: "); Serial.println(relayStates[1] ? "ON" : "OFF");
-    Serial.print("SSR: "); Serial.println(relayStates[2] ? "ON" : "OFF");
     Serial.println("------------------------");
   } else {
     Serial.println("WiFi Disconnected. Cannot send data.");
@@ -140,16 +137,14 @@ void handleGetRequest() {
   server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
 
   if (server.hasArg("pin") && server.hasArg("state")) {
-    int pin = server.arg("pin").toInt();   // 0=Fan,1=Compressor,2=SSR
+    int pin = server.arg("pin").toInt();   // 0=Fan, 1=Compressor
     int state = server.arg("state").toInt();
 
-    if (pin >= 0 && pin < 3) {
+    if (pin >= 0 && pin < 2) {
       relayStates[pin] = state;
 
-      // Control actual relay pins
       if (pin == 0) digitalWrite(FAN_PIN, state ? HIGH : LOW);
       if (pin == 1) digitalWrite(COMPRESSOR_PIN, state ? HIGH : LOW);
-      if (pin == 2) digitalWrite(SSR_PIN, state ? HIGH : LOW);
 
       Serial.print("Relay "); Serial.print(pin);
       Serial.print(" turned ");
@@ -157,7 +152,7 @@ void handleGetRequest() {
 
       server.send(200, "text/plain", "Relay state updated");
     } else {
-      server.send(400, "text/plain", "Invalid relay ID (must be 0, 1, or 2)");
+      server.send(400, "text/plain", "Invalid relay ID (must be 0 or 1)");
     }
   } else {
     server.send(400, "text/plain", "Missing arguments: pin or state");

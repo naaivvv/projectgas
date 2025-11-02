@@ -51,18 +51,6 @@
         </div>
       </label>
     </div>
-
-    <!-- SSR Relay -->
-    <div class="space-y-2">
-      <p class="text-lg font-medium text-gray-600">SSR</p>
-      <label class="flex items-center cursor-pointer justify-center">
-        <div class="relative">
-          <input type="checkbox" id="ssrToggle" class="sr-only" onchange="toggleRelay(2, this.checked)">
-          <div class="block bg-gray-300 w-16 h-8 rounded-full toggle-bg"></div>
-          <div class="dot absolute left-1 top-1 bg-white w-6 h-6 rounded-full shadow-md"></div>
-        </div>
-      </label>
-    </div>
   </div>
 
   <!-- Sensor Data Card -->
