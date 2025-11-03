@@ -34,7 +34,7 @@ WebServer server(80);
 
 // Timing
 unsigned long lastHTTPRequest = 0;
-const unsigned long httpRequestInterval = 10000;
+const unsigned long httpRequestInterval = 5000;
 bool sensorsReady = false;  // flag for warm-up
 
 void setup() {
